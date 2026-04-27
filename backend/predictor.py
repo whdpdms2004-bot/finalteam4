@@ -1,7 +1,8 @@
 """
-predictor.py — 미국 뷰티 시장 적합성 예측 파이프라인
+predictor.py — 미국 뷰티 시장 적합성 점수 산출
 
-파이프라인: 규제성분게이트 → 피처 전처리 → ML 예측 → 결과 반환
+파이프라인: 피처 전처리 → ML 예측 → 결과 반환
+규제 성분 체크는 UI 단계에서 사전 처리됨 (이 파일 담당 아님)
 
 ML 모델 교체 방법 (모델 파일 경로만 변경):
     pred = MarketFitPredictor(model_path='path/to/new_model.pkl')
@@ -16,9 +17,9 @@ ML 모델 교체 방법 (모델 파일 경로만 변경):
         'ingredients': 'Water, Niacinamide, Glycerin, Hyaluronic Acid, ...',
     })
     # result = {
-    #   'gate': {'pass': True, 'reason': '통과'},
-    #   'prediction': 1,
+    #   'prediction': 1,         # 1=시장적합, 0=부적합
     #   'probability': 0.7231,
+    #   'score': 72.3,           # 0~100점
     #   'threshold': 0.35,
     #   'category': 'skincare',
     # }
@@ -27,25 +28,8 @@ ML 모델 교체 방법 (모델 파일 경로만 변경):
 import re
 import numpy as np
 import joblib
-import os
 
-# ── 기본 모델 경로 (교체 시 이 값 또는 생성자 인자 변경)
 DEFAULT_MODEL_PATH = r"C:\workspace\finalproject\data\model_output\lgbm_v21.pkl"
-
-# ── 규제 성분 (regulation.py와 동기화)
-_BANNED = [
-    "bithionol", "chlorofluorocarbon propellants", "chloroform",
-    "halogenated salicylanilides", "hexachlorophene", "mercury compounds",
-    "methylene chloride", "prohibited cattle materials",
-    "vinyl chloride", "zirconium-containing complexes",
-]
-_SUNSCREEN_APPROVED = [
-    "aminobenzoic acid", "avobenzone", "cinoxate", "dioxybenzone",
-    "homosalate", "menthyl anthranilate", "octocrylene",
-    "octyl methoxycinnamate", "octyl salicylate", "oxybenzone",
-    "padimate o", "phenylbenzimidazole sulfonic acid", "sulisobenzone",
-    "titanium dioxide", "trolamine salicylate", "zinc oxide",
-]
 
 
 class MarketFitPredictor:
@@ -66,34 +50,12 @@ class MarketFitPredictor:
         self.gt_map               = data["gt_map"]
         self.new_position_targets = data.get("new_position_targets", {})
         self.thresholds           = data.get("category_thresholds", {
-            "skincare": 0.35, "cleansing": 0.35, "masks": 0.30, "suncare": 0.40,
+            "skincare": 0.35, "cleansing": 0.40, "masks": 0.35, "suncare": 0.45,
         })
-        # 카테고리별 학습 데이터 가격 배열 (price_rank_in_cat 계산용)
         self._price_arrays = data.get("price_arrays", {})
 
     # ──────────────────────────────────────────
-    # STEP 1. 규제 성분 게이트
-    # ──────────────────────────────────────────
-    @staticmethod
-    def check_regulation(ingredients_text: str, category: str) -> dict:
-        """
-        규제 성분 포함 여부 + 선케어 승인 성분 체크.
-
-        Returns
-        -------
-        {"pass": bool, "reason": str}
-        """
-        text = ingredients_text.strip().lower()
-        for banned in _BANNED:
-            if banned in text:
-                return {"pass": False, "reason": f"규제 성분 포함: {banned}"}
-        if category == "suncare":
-            if not any(a in text for a in _SUNSCREEN_APPROVED):
-                return {"pass": False, "reason": "선크림 승인 성분 미포함"}
-        return {"pass": True, "reason": "통과"}
-
-    # ──────────────────────────────────────────
-    # STEP 2. 피처 전처리
+    # 피처 전처리
     # ──────────────────────────────────────────
     def _preprocess(self, product: dict) -> np.ndarray:
         price    = float(product.get("공급가(USD)") or 0)
@@ -106,12 +68,10 @@ class MarketFitPredictor:
             raw_ing = ", ".join(str(x) for x in raw_ing if x)
         ing_lower = str(raw_ing).lower()
 
-        # 성분 리스트 (위치 피처 계산용)
         ing_list  = [x.strip() for x in re.split(r"[,\n]", ing_lower) if x.strip()]
         total_ing = max(len(ing_list), 1)
 
         def find_pos(pattern: str) -> float:
-            """성분 목록에서 pattern의 정규화된 위치 반환 (없으면 -1)."""
             for i, ing in enumerate(ing_list):
                 if pattern in ing:
                     return 1.0 - i / total_ing
@@ -119,7 +79,7 @@ class MarketFitPredictor:
 
         row = {}
 
-        # ── 가격
+        # 가격
         row["price_low"]  = int(0 < price <= 30)
         row["price_mid"]  = int(30 < price <= 71)
         row["price_high"] = int(price > 71)
@@ -128,26 +88,21 @@ class MarketFitPredictor:
         arr = np.array(self._price_arrays.get(category, []))
         row["price_rank_in_cat"] = float((arr <= price).mean()) if len(arr) > 0 else 0.5
 
-        # ── 기본
-        row["SPF_Index"]       = spf
+        row["SPF_Index"]        = spf
         row["ingredient_count"] = total_ing
 
-        # ── 카테고리(대) 원핫
+        # 카테고리(대) 원핫
         for cat in ("skincare", "cleansing", "masks", "suncare"):
             row[f"cat_{cat}"] = int(category == cat)
 
-        # ── 카테고리(중) 원핫 — feat_cols에 있는 mid_* 컬럼만
+        # 카테고리(중) 원핫
         for col in self.feat_cols:
             if col.startswith("mid_"):
                 row[col] = int(cat_mid == col[4:])
 
-        # ── GT 트렌드 성분 이진 피처
-        active_gt = []
+        # GT 트렌드 성분
         for feat, kw in self.gt_map.items():
-            present = int(kw.lower() in ing_lower)
-            row[feat] = present
-            if present:
-                active_gt.append(feat)
+            row[feat] = int(kw.lower() in ing_lower)
 
         gt_in_feat = [c for c in self.gt_map if c in self.feat_cols]
         row["us_trend_ratio"] = (
@@ -155,12 +110,11 @@ class MarketFitPredictor:
             if gt_in_feat else 0.0
         )
 
-        # ── 성분 위치 피처 (new_position_targets)
+        # 성분 위치 피처
         for feat, pattern in self.new_position_targets.items():
             row[f"{feat}_position"]   = find_pos(pattern.lower())
-            row[f"{feat}_above_1pct"] = -1  # phenoxyethanol 기준 생략
+            row[f"{feat}_above_1pct"] = -1
 
-        # ── 레거시 위치 피처
         legacy_pos_map = {
             "niacinamide_position":           "niacinamide",
             "ceramide_position":              "ceramide",
@@ -177,7 +131,6 @@ class MarketFitPredictor:
                 continue
             row[col] = find_pos(pattern) if pattern else -1
 
-        # us_trend_ingredient_position: 가장 앞쪽에 나온 트렌드 성분의 위치
         if "us_trend_ingredient_position" in self.feat_cols:
             positions = [find_pos(kw.lower()) for kw in self.gt_map.values()]
             valid = [p for p in positions if p > 0]
@@ -185,7 +138,7 @@ class MarketFitPredictor:
         if "us_trend_ingredient_above_1pct" in self.feat_cols:
             row["us_trend_ingredient_above_1pct"] = -1
 
-        # ── 클렌징 전용 피처
+        # 클렌징 전용
         row["is_sulfate"] = int(any(x in ing_lower for x in (
             "sodium lauryl sulfate", "sodium laureth sulfate",
             "ammonium lauryl sulfate", "ammonium laureth sulfate",
@@ -209,7 +162,7 @@ class MarketFitPredictor:
         row["is_gel_cleanser"]  = int("gel"  in cat_mid and category == "cleansing")
         row["is_salicylic"]     = int("salicylic acid" in ing_lower)
 
-        # ── 선케어 전용 피처
+        # 선케어 전용
         row["is_physical_filter"] = int(
             "zinc oxide" in ing_lower or "titanium dioxide" in ing_lower
         )
@@ -224,10 +177,9 @@ class MarketFitPredictor:
             3 if spf > 50 else 2 if spf > 30 else 1 if spf > 0 else 0
         )
 
-        # citric acid position
         row["citric_acid_position"] = find_pos("citric acid")
 
-        # ── 교호작용: category × 신호
+        # 교호작용
         interact_pairs = {
             "interact_cleansing_amino":       ("cat_cleansing", "is_amino_surfactant"),
             "interact_cleansing_mild":        ("cat_cleansing", "is_mild_surfactant"),
@@ -252,20 +204,14 @@ class MarketFitPredictor:
         for col, (a, b) in interact_pairs.items():
             row[col] = row.get(a, 0) * row.get(b, 0)
 
-        # ── ingredient_count × category
         for cat in ("skincare", "cleansing", "masks", "suncare"):
-            row[f"interact_ic_{cat}"] = row["ingredient_count"] * row.get(f"cat_{cat}", 0)
+            row[f"interact_ic_{cat}"]       = row["ingredient_count"] * row.get(f"cat_{cat}", 0)
+            row[f"interact_logprice_{cat}"] = row["log_price"]        * row.get(f"cat_{cat}", 0)
 
-        # ── log_price × category
-        for cat in ("skincare", "cleansing", "masks", "suncare"):
-            row[f"interact_logprice_{cat}"] = row["log_price"] * row.get(f"cat_{cat}", 0)
-
-        # ── us_trend_ratio × price bin
         row["interact_trend_price_low"]  = row["us_trend_ratio"] * row["price_low"]
         row["interact_trend_price_mid"]  = row["us_trend_ratio"] * row["price_mid"]
         row["interact_trend_price_high"] = row["us_trend_ratio"] * row["price_high"]
 
-        # ── position × category
         pos_cat_pairs = {
             "pos_clean_niacinamide": ("niacinamide_position",           "cat_cleansing"),
             "pos_clean_amino":       ("amino_acid_surfactant_position",  "cat_cleansing"),
@@ -283,11 +229,10 @@ class MarketFitPredictor:
         for col, (pos_col, cat_col) in pos_cat_pairs.items():
             row[col] = row.get(cat_col, 0) * row.get(pos_col, 0)
 
-        # ── feat_cols 순서대로 벡터 구성 (없는 피처는 0으로 채움)
         return np.array([row.get(c, 0) for c in self.feat_cols], dtype=float)
 
     # ──────────────────────────────────────────
-    # STEP 3. 전체 파이프라인
+    # 예측
     # ──────────────────────────────────────────
     def predict(self, product: dict) -> dict:
         """
@@ -299,47 +244,31 @@ class MarketFitPredictor:
             {
                 '공급가(USD)': float,
                 'target_category': str,   # 'skincare'|'cleansing'|'masks'|'suncare'
-                '카테고리(중)': str,       # 예: 'moisturizer', 'foam cleanser'
+                '카테고리(중)': str,
                 'SPF_Index': float|None,
-                'ingredients': str|list,  # 성분 텍스트 또는 리스트
+                'ingredients': str|list,
             }
 
         Returns
         -------
         dict
             {
-                'gate': {'pass': bool, 'reason': str},
-                'prediction': int|None,   # 1=시장적합, 0=부적합, None=게이트 실패
-                'probability': float|None,
-                'threshold': float|None,
+                'prediction': int,    # 1=시장적합, 0=부적합
+                'probability': float,
+                'score': float,       # 0~100점
+                'threshold': float,
                 'category': str,
             }
         """
-        category = str(product.get("target_category") or "").lower()
-        raw_ing  = product.get("ingredients") or ""
-        if isinstance(raw_ing, list):
-            raw_ing = ", ".join(str(x) for x in raw_ing if x)
-
-        # 1. 규제 성분 게이트
-        gate = self.check_regulation(raw_ing, category)
-        if not gate["pass"]:
-            return {
-                "gate": gate, "prediction": None,
-                "probability": None, "score": None,
-                "threshold": None, "category": category,
-            }
-
-        # 2. 전처리 + 예측
-        vec        = self._preprocess(product).reshape(1, -1)
-        threshold  = self.thresholds.get(category, 0.50)
-        proba      = float(self.model.predict_proba(vec)[0, 1])
-        prediction = int(proba >= threshold)
+        category  = str(product.get("target_category") or "").lower()
+        vec       = self._preprocess(product).reshape(1, -1)
+        threshold = self.thresholds.get(category, 0.50)
+        proba     = float(self.model.predict_proba(vec)[0, 1])
 
         return {
-            "gate":        gate,
-            "prediction":  prediction,
+            "prediction":  int(proba >= threshold),
             "probability": round(proba, 4),
-            "score":       round(proba * 100, 1),   # 0~100점
+            "score":       round(proba * 100, 1),
             "threshold":   threshold,
             "category":    category,
         }
@@ -349,13 +278,12 @@ class MarketFitPredictor:
         return [self.predict(p) for p in products]
 
 
-# ── 간단 동작 테스트
 if __name__ == "__main__":
     pred = MarketFitPredictor()
 
     examples = [
         {
-            "name": "스킨케어 (니아신아마이드 포함)",
+            "name": "스킨케어",
             "공급가(USD)": 38.0,
             "target_category": "skincare",
             "카테고리(중)": "moisturizer",
@@ -363,15 +291,7 @@ if __name__ == "__main__":
             "ingredients": "Water, Niacinamide, Glycerin, Hyaluronic Acid, Ceramide, Peptide",
         },
         {
-            "name": "클렌징 (규제 성분 포함)",
-            "공급가(USD)": 25.0,
-            "target_category": "cleansing",
-            "카테고리(중)": "foam cleanser",
-            "SPF_Index": None,
-            "ingredients": "Water, Chloroform, Glycerin",
-        },
-        {
-            "name": "선케어 (승인 성분 포함)",
+            "name": "선케어",
             "공급가(USD)": 42.0,
             "target_category": "suncare",
             "카테고리(중)": "sunscreen",
@@ -379,7 +299,7 @@ if __name__ == "__main__":
             "ingredients": "Water, Zinc Oxide, Titanium Dioxide, Glycerin, Niacinamide",
         },
         {
-            "name": "마스크 (저가)",
+            "name": "마스크",
             "공급가(USD)": 12.0,
             "target_category": "masks",
             "카테고리(중)": "sheet mask",
@@ -391,10 +311,5 @@ if __name__ == "__main__":
     for ex in examples:
         name = ex.pop("name")
         result = pred.predict(ex)
-        label  = "✅ 적합" if result["prediction"] == 1 else (
-                 "❌ 부적합" if result["prediction"] == 0 else "🚫 게이트 차단"
-        )
-        print(f"\n[{name}]")
-        print(f"  게이트  : {result['gate']['reason']}")
-        print(f"  점수    : {result['score']}점  (threshold={result['threshold']})")
-        print(f"  결과    : {label}")
+        label = "적합" if result["prediction"] == 1 else "부적합"
+        print(f"[{name}] {result['score']}점 ({label}, threshold={result['threshold']})")
