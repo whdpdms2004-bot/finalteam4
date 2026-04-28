@@ -1,12 +1,13 @@
 # form 값과 predictor 쪽에서 쓰는 키 매핑
 # predictor : 공급가(USD), target_category(skincare, suncare, cleansing, masks),
-# 카테고리(중)(직접 확인 필요), SPF_Index, ingredients 
+# 카테고리(중)(직접 확인 필요), SPF_Index, ingredients
 
 from typing import Dict, Any
 from sqlalchemy.orm import Session
 from schemas import ProductCreate
 from predictor import MarketFitPredictor
 from models import Product, ProIng
+from ingredient_map import translate_ingredients
 
 _predictor = MarketFitPredictor()
 
@@ -59,8 +60,7 @@ SUBCATEGORY_MAP = {
     "클렌징패드": "cleansing tissue/pad",
     "필링/스크럽": "cleansing foam/gel",
     "스크럽/필링패드": "cleansing foam/gel",
-    "립": "lip & eye remover",
-    "아이리무버": "lip & eye remover",
+    "립&아이리무버": "lip & eye remover",
 
     # 마스크팩
     "시트마스크": "sheet mask",
@@ -95,7 +95,7 @@ def save_product_and_predict(db: Session, data: ProductCreate) -> Dict[str, Any]
     db.commit()
 
     # 3) 예측
-    ingredients_str = ", ".join(ing.ing_name for ing in data.ingredients)
+    ingredients_str = translate_ingredients([ing.ing_name for ing in data.ingredients])
     predictor_input = map_front_to_predictor({
         "category":    data.category,
         "subCategory": data.sub_category,
@@ -124,7 +124,6 @@ def map_front_to_predictor(form: Dict[str, Any]) -> Dict[str, Any]:
         price = float(price_raw) if price_raw is not None else 0.0
     except (ValueError, TypeError):
         price = 0.0
-
 
     # 4) SPF
     spf_raw = form.get("spf")
