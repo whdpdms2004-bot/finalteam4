@@ -28,8 +28,9 @@ ML 모델 교체 방법 (모델 파일 경로만 변경):
 import re
 import numpy as np
 import joblib
+import shap
 
-DEFAULT_MODEL_PATH = r"C:\workspace\finalproject\data\model_output\lgbm_v21.pkl"
+DEFAULT_MODEL_PATH = r"C:\Users\asiae\Documents\lgbm_final.pkl"
 
 
 class MarketFitPredictor:
@@ -39,7 +40,7 @@ class MarketFitPredictor:
     Parameters
     ----------
     model_path : str
-        lgbm_v21.pkl (또는 교체 모델) 경로.
+        lgbm_final.pkl (또는 교체 모델) 경로.
         모델을 바꿀 때 이 인자만 수정하면 나머지 파이프라인은 그대로 동작.
     """
 
@@ -53,6 +54,7 @@ class MarketFitPredictor:
             "skincare": 0.35, "cleansing": 0.40, "masks": 0.35, "suncare": 0.45,
         })
         self._price_arrays = data.get("price_arrays", {})
+        self._explainer = shap.TreeExplainer(self.model)
 
     # ──────────────────────────────────────────
     # 피처 전처리
@@ -260,17 +262,24 @@ class MarketFitPredictor:
                 'category': str,
             }
         """
-        category  = str(product.get("target_category") or "").lower()
-        vec       = self._preprocess(product).reshape(1, -1)
-        threshold = self.thresholds.get(category, 0.50)
-        proba     = float(self.model.predict_proba(vec)[0, 1])
+        vec   = self._preprocess(product).reshape(1, -1)
+        proba = float(self.model.predict_proba(vec)[0, 1])
+
+        # SHAP 상위 3개 피처
+        shap_vals = self._explainer.shap_values(vec)
+        if isinstance(shap_vals, list):
+            sv = shap_vals[1][0]
+        else:
+            sv = shap_vals[0]
+        top_idx = np.argsort(np.abs(sv))[::-1][:3]
+        top_features = [
+            {"feature": self.feat_cols[i], "shap_value": round(float(sv[i]), 4)}
+            for i in top_idx
+        ]
 
         return {
-            "prediction":  int(proba >= threshold),
-            "probability": round(proba, 4),
-            "score":       round(proba * 100, 1),
-            "threshold":   threshold,
-            "category":    category,
+            "score":        round(proba * 100, 1),
+            "top_features": top_features,
         }
 
     def predict_batch(self, products: list) -> list:
