@@ -25,12 +25,13 @@ ML 모델 교체 방법 (모델 파일 경로만 변경):
     # }
 """
 
+import os
 import re
 import numpy as np
 import joblib
 import shap
 
-DEFAULT_MODEL_PATH = r"C:\Users\asiae\Documents\lgbm_final.pkl"
+DEFAULT_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "lgbm_final.pkl")
 
 
 class MarketFitPredictor:

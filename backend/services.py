@@ -2,11 +2,11 @@
 # predictor : 공급가(USD), target_category(skincare, suncare, cleansing, masks),
 # 카테고리(중)(직접 확인 필요), SPF_Index, ingredients 
 
-from typing import Dict, Any, List
-from sqlalchemy.orm import Session
-from models import Product, ProIng
+from typing import Dict, Any
 from schemas import ProductCreate
 from predictor import MarketFitPredictor
+# from sqlalchemy.orm import Session
+# from models import Product, ProIng
 
 _predictor = MarketFitPredictor()
 
@@ -71,36 +71,14 @@ SUBCATEGORY_MAP = {
     "부분마스크/팩": "patch",
 }
 
-def save_product_and_predict(db: Session, data: ProductCreate) -> Dict[str, Any]:
-    """
-    1) products 테이블에 상품 저장
-    2) pro_ing 테이블에 성분 저장
-    3) predictor 호출 후 점수 반환
-    """
-    # 1) 상품 저장
-    product = Product(
-        brand_id=data.brand_id,
-        category_detail_id=data.category_detail_id,
-        product_name=data.product_name,
-        brand_name=data.brand_name,
-        price=data.price,
-        spf_index=data.spf_index,
-    )
-    db.add(product)
-    db.flush()  # product_id 확보 (commit 전)
+def save_product_and_predict(data: ProductCreate) -> Dict[str, Any]:
+    # TODO: DB 저장 연결 후 주석 해제
+    # db.add(Product(...))
+    # db.flush()
+    # for seq_no, ing in enumerate(data.ingredients, start=1):
+    #     db.add(ProIng(product_id=product.product_id, ...))
+    # db.commit()
 
-    # 2) 성분 저장 (seq_no = 입력 순서)
-    for seq_no, ing in enumerate(data.ingredients, start=1):
-        db.add(ProIng(
-            product_id=product.product_id,
-            ing_name=ing.ing_name,
-            ing_kor=ing.ing_kor,
-            seq_no=seq_no,
-        ))
-
-    db.commit()
-
-    # 3) predictor 입력 생성 후 예측
     ingredients_str = ", ".join(ing.ing_name for ing in data.ingredients)
     predictor_input = map_front_to_predictor({
         "category":    data.category,
@@ -109,9 +87,7 @@ def save_product_and_predict(db: Session, data: ProductCreate) -> Dict[str, Any]
         "spf":         data.spf_index,
         "ingredients": ingredients_str,
     })
-    result = _predictor.predict(predictor_input)
-
-    return result
+    return _predictor.predict(predictor_input)
 
 
 def map_front_to_predictor(form: Dict[str, Any]) -> Dict[str, Any]:
