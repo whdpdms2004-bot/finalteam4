@@ -1,12 +1,13 @@
 # form 값과 predictor 쪽에서 쓰는 키 매핑
 # predictor : 공급가(USD), target_category(skincare, suncare, cleansing, masks),
-# 카테고리(중)(직접 확인 필요), SPF_Index, ingredients 
+# 카테고리(중)(직접 확인 필요), SPF_Index, ingredients
 
 from typing import Dict, Any
+from sqlalchemy.orm import Session
 from schemas import ProductCreate
 from predictor import MarketFitPredictor
-# from sqlalchemy.orm import Session
-# from models import Product, ProIng
+from models import Product, ProIng
+from ingredient_map import translate_ingredients
 
 _predictor = MarketFitPredictor()
 
@@ -59,8 +60,7 @@ SUBCATEGORY_MAP = {
     "클렌징패드": "cleansing tissue/pad",
     "필링/스크럽": "cleansing foam/gel",
     "스크럽/필링패드": "cleansing foam/gel",
-    "립": "lip & eye remover",
-    "아이리무버": "lip & eye remover",
+    "립&아이리무버": "lip & eye remover",
 
     # 마스크팩
     "시트마스크": "sheet mask",
@@ -71,15 +71,31 @@ SUBCATEGORY_MAP = {
     "부분마스크/팩": "patch",
 }
 
-def save_product_and_predict(data: ProductCreate) -> Dict[str, Any]:
-    # TODO: DB 저장 연결 후 주석 해제
-    # db.add(Product(...))
-    # db.flush()
-    # for seq_no, ing in enumerate(data.ingredients, start=1):
-    #     db.add(ProIng(product_id=product.product_id, ...))
-    # db.commit()
+def save_product_and_predict(db: Session, data: ProductCreate) -> Dict[str, Any]:
+    # 1) 상품 저장
+    product = Product(
+        brand_id=data.brand_id,
+        category_detail_id=data.category_detail_id,
+        product_name=data.product_name,
+        brand_name=data.brand_name,
+        price=data.price,
+        spf_index=data.spf_index,
+    )
+    db.add(product)
+    db.flush()
 
-    ingredients_str = ", ".join(ing.ing_name for ing in data.ingredients)
+    # 2) 성분 저장
+    for seq_no, ing in enumerate(data.ingredients, start=1):
+        db.add(ProIng(
+            product_id=product.product_id,
+            ing_name=ing.ing_name,
+            ing_kor=ing.ing_kor,
+            seq_no=seq_no,
+        ))
+    db.commit()
+
+    # 3) 예측
+    ingredients_str = translate_ingredients([ing.ing_name for ing in data.ingredients])
     predictor_input = map_front_to_predictor({
         "category":    data.category,
         "subCategory": data.sub_category,
@@ -108,7 +124,6 @@ def map_front_to_predictor(form: Dict[str, Any]) -> Dict[str, Any]:
         price = float(price_raw) if price_raw is not None else 0.0
     except (ValueError, TypeError):
         price = 0.0
-
 
     # 4) SPF
     spf_raw = form.get("spf")
