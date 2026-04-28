@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Sequence
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 from database import Base
@@ -7,7 +7,7 @@ from database import Base
 class Product(Base):
     __tablename__ = "products"
 
-    product_id        = Column(Integer, Sequence("products_seq"), primary_key=True)  # 시퀀스 이름 확인 후 수정
+    product_id        = Column(Integer, primary_key=True, autoincrement=True)
     brand_id          = Column(Integer, nullable=False)
     category_detail_id = Column(Integer, nullable=False)
     product_name      = Column(String(200), nullable=False)
@@ -23,7 +23,7 @@ class Product(Base):
 class ProIng(Base):
     __tablename__ = "pro_ing"
 
-    ing_id     = Column(Integer, Sequence("pro_ing_seq"), primary_key=True)  # 시퀀스 이름 확인 후 수정
+    ing_id     = Column(Integer, primary_key=True, autoincrement=True)
     product_id = Column(Integer, ForeignKey("products.product_id"), nullable=False)
     ing_name   = Column(String(200), nullable=False)
     ing_kor    = Column(String(200), nullable=True)

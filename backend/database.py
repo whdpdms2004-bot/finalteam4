@@ -3,7 +3,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 # 어느 db에 연결할지 문자열로 작성
-DATABASE_URL = "oracle+oracledb://FINAL4:1111@192.168.0.183:1521/?service_name=ai4db"
+DATABASE_URL = "postgresql://postgres:beautybridgeDB!!@db.uulxpyapsfnymlqenehj.supabase.co:5432/postgres"
 
 # 이 engine은 models.py에서 테이블 생성 
 engine = create_engine(DATABASE_URL)

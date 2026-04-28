@@ -6,3 +6,5 @@ numpy
 joblib
 shap
 pydantic
+sqlalchemy
+psycopg2-binary
