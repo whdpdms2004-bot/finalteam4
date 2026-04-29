@@ -272,7 +272,7 @@ class MarketFitPredictor:
             sv = shap_vals[1][0]
         else:
             sv = shap_vals[0]
-        top_idx = np.argsort(np.abs(sv))[::-1][:3]
+        top_idx = np.argsort(np.abs(sv))[::-1][:10]
         top_features = [
             {"feature": self.feat_cols[i], "shap_value": round(float(sv[i]), 4)}
             for i in top_idx

@@ -1,0 +1,7 @@
+﻿model/*.pkl
+model/*.joblib
+*.env
+__pycache__/
+.ipynb_checkpoints/
+*.csv
+.DS_Store
