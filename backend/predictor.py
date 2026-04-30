@@ -57,6 +57,30 @@ class MarketFitPredictor:
         self._price_arrays = data.get("price_arrays", {})
         self._explainer = shap.TreeExplainer(self.model)
 
+    # 액티브 성분 집합 (top5_active_count / top30pct_active_count 계산용)
+    _ACTIVE_SET = {s.lower() for s in (
+        {'Niacinamide', 'Nicotinamide', 'Vitamin B3'} |
+        {'Ceramide', 'Ceramide NP', 'Ceramide AP', 'Ceramide EOP', 'Ceramide NG',
+         'Ceramide NS', 'Ceramide EOS', 'Ceramide 1', 'Ceramide 2', 'Ceramide 3', 'Ceramide 6 II'} |
+        {'Sodium Hyaluronate', 'Hyaluronic Acid', 'Hyaluronic acid',
+         'Hydrolyzed Hyaluronic Acid', 'Sodium Acetylated Hyaluronate',
+         'Hydroxypropyltrimonium Hyaluronate', 'Sodium Hyaluronate Crosspolymer',
+         'Hydrolyzed Sodium Hyaluronate'} |
+        {'Zinc Oxide', 'Zinc oxide'} |
+        {'Centella Asiatica Extract', 'Centella asiatica Extract', 'Asiaticoside',
+         'Madecassoside', 'Asiatic Acid', 'Madecassic Acid', 'Centella Asiatica Leaf Extract'} |
+        {'PDRN', 'Polydeoxyribonucleotide', 'Pdrn', 'Pdrn Sodium Dna',
+         'PDRN Sodium DNA', 'Salmon DNA', 'Salmon PDRN'} |
+        {'Sodium Cocoyl Glycinate', 'Sodium Lauroyl Glutamate', 'Sodium Cocoyl Glutamate',
+         'Disodium Cocoyl Glutamate', 'Potassium Cocoyl Glycinate',
+         'Sodium Methyl Cocoyl Taurate', 'Sodium Lauroyl Methyl Isethionate',
+         'Sodium Lauroyl Oat Amino Acids'} |
+        {'Retinol', 'Bakuchiol', 'Tranexamic Acid', 'Alpha-Arbutin', 'Ascorbic Acid',
+         '3-O-Ethyl Ascorbic Acid', 'Ascorbyl Glucoside', 'Adenosine', 'Peptides',
+         'Palmitoyl Tripeptide-1', 'Palmitoyl Tetrapeptide-7',
+         'Galactomyces Ferment Filtrate', 'Bifida Ferment Lysate'}
+    )}
+
     # ──────────────────────────────────────────
     # 피처 전처리
     # ──────────────────────────────────────────
@@ -140,6 +164,12 @@ class MarketFitPredictor:
             row["us_trend_ingredient_position"] = max(valid) if valid else -1
         if "us_trend_ingredient_above_1pct" in self.feat_cols:
             row["us_trend_ingredient_above_1pct"] = -1
+
+        # top5_active_count / top30pct_active_count
+        ing_original = [x.strip() for x in re.split(r"[,\n]", str(product.get("ingredients") or "")) if x.strip()]
+        n_ing = max(len(ing_original), 1)
+        row["top5_active_count"]    = sum(1 for v in ing_original[:5] if v.lower() in self._ACTIVE_SET)
+        row["top30pct_active_count"] = sum(1 for v in ing_original[:max(1, int(n_ing * 0.3))] if v.lower() in self._ACTIVE_SET)
 
         # 클렌징 전용
         row["is_sulfate"] = int(any(x in ing_lower for x in (
