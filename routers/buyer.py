@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -344,7 +345,7 @@ def _chat_filter(q: str, show_all: bool) -> list:
     items = sorted(items, key=lambda p: p["fitScore"], reverse=True)
     return items if show_all else items[:3]
 
-def _chat_summary(query: str, n: int, category: str | None, complaints: list) -> str:
+def _chat_summary(query: str, n: int, category: Optional[str], complaints: list) -> str:
     if not _ai:
         prefix = f"{category} 카테고리에서 " if category else ""
         return f"분석 완료! {prefix}조건에 맞는 제품 {n}개를 찾았어요."
