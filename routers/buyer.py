@@ -143,7 +143,12 @@ def get_products(
 ):
     MAIN_NAME_MAP = {"스킨케어": 1, "클렌징": 2, "선케어": 3, "마스크팩": 4}
 
-    query = db.query(Product).options(selectinload(Product.ingredients))
+    query = (
+        db.query(Product)
+        .options(selectinload(Product.ingredients))
+        .filter(Product.brand_id == 1)          # 비플레인 상품만
+        .filter(Product.status != '심사중')      # 심사 중은 바이어에게 비노출
+    )
 
     # ── 카테고리 필터 ──────────────────────────────────────────
     if category and category not in ("전체", ""):

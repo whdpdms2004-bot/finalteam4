@@ -16,6 +16,7 @@ class Product(Base):
     spf_index         = Column(Float, nullable=True)
     score             = Column(Float, nullable=True)
     sub_category      = Column(String(100), nullable=True)
+    status            = Column(String(50), default='active')
     created_at        = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at        = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 

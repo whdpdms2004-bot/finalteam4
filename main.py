@@ -17,6 +17,12 @@ def on_startup():
     with engine.connect() as conn:
         conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS score FLOAT"))
         conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS sub_category VARCHAR(100)"))
+        conn.execute(text("ALTER TABLE products ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'active'"))
+        # 심사 중 상품은 바이어에게 노출 안 됨
+        conn.execute(text(
+            "UPDATE products SET status = '심사중' "
+            "WHERE product_id IN (7, 8, 9) AND (status IS NULL OR status = 'active')"
+        ))
         conn.commit()
 
 # CORS 설정
