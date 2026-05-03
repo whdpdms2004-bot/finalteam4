@@ -1,11 +1,11 @@
 import os
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import text
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import text, or_, and_
 from pydantic import BaseModel
 from database import get_db
-from models import Product
+from models import Product, ProIng
 
 router = APIRouter(prefix="/buyer", tags=["buyer"])
 
@@ -136,8 +136,59 @@ def get_influencers_for_product(product_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/products")
-def get_products(db: Session = Depends(get_db)):
-    return {"message": "상품 목록 - 구현 예정", "products": []}
+def get_products(
+    category: Optional[str] = Query(None),
+    search:   Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    MAIN_NAME_MAP = {"스킨케어": 1, "클렌징": 2, "선케어": 3, "마스크팩": 4}
+
+    query = db.query(Product).options(selectinload(Product.ingredients))
+
+    # ── 카테고리 필터 ──────────────────────────────────────────
+    if category and category not in ("전체", ""):
+        cat_id = MAIN_NAME_MAP.get(category)
+        if cat_id:
+            matching_subs = [sub for sub, mid in SUBCAT_TO_MAIN.items() if mid == cat_id]
+            detail_filters = [
+                and_(Product.category_detail_id >= r.start, Product.category_detail_id < r.stop)
+                for r, mid in DETAIL_ID_TO_MAIN.items() if mid == cat_id
+            ]
+            f = []
+            if matching_subs:
+                f.append(Product.sub_category.in_(matching_subs))
+            f.extend(detail_filters)
+            if f:
+                query = query.filter(or_(*f))
+
+    # ── 검색 필터 (브랜드·상품명·성분) ────────────────────────
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        ing_ids = db.query(ProIng.product_id).filter(
+            or_(ProIng.ing_name.ilike(term), ProIng.ing_kor.ilike(term))
+        )
+        query = query.filter(or_(
+            Product.brand_name.ilike(term),
+            Product.product_name.ilike(term),
+            Product.product_id.in_(ing_ids),
+        ))
+
+    products = query.order_by(text("score DESC NULLS LAST")).all()
+
+    result = []
+    for p in products:
+        ings = sorted(p.ingredients, key=lambda i: i.seq_no)[:5]
+        result.append({
+            "product_id":   p.product_id,
+            "brand":        p.brand_name,
+            "name":         p.product_name,
+            "price":        p.price,
+            "score":        round(float(p.score)) if p.score else 0,
+            "sub_category": p.sub_category or "",
+            "spf":          p.spf_index,
+            "ingredients":  [{"name": i.ing_name, "kor": i.ing_kor or i.ing_name} for i in ings],
+        })
+    return result
 
 
 @router.get("/category")
