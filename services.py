@@ -9,10 +9,7 @@ from predictor import MarketFitPredictor
 from models import Product, ProIng
 from ingredient_map import translate_ingredients
 
-try:
-    _predictor = MarketFitPredictor()
-except Exception:
-    _predictor = None
+_predictor = MarketFitPredictor()
 
 CATEGORY_MAP = {
     "스킨케어": "skincare",
@@ -83,7 +80,6 @@ def save_product_and_predict(db: Session, data: ProductCreate) -> Dict[str, Any]
         brand_name=data.brand_name,
         price=data.price,
         spf_index=data.spf_index,
-        sub_category=data.sub_category,
     )
     db.add(product)
     db.flush()
@@ -96,6 +92,7 @@ def save_product_and_predict(db: Session, data: ProductCreate) -> Dict[str, Any]
             ing_kor=ing.ing_kor,
             seq_no=seq_no,
         ))
+    db.commit()
 
     # 3) 예측
     ingredients_str = translate_ingredients([ing.ing_name for ing in data.ingredients])
@@ -106,14 +103,7 @@ def save_product_and_predict(db: Session, data: ProductCreate) -> Dict[str, Any]
         "spf":         data.spf_index,
         "ingredients": ingredients_str,
     })
-    result = _predictor.predict(predictor_input)
-
-    # 4) score 저장
-    product.score = result["score"]
-    db.commit()
-
-    result["product_id"] = product.product_id
-    return result
+    return _predictor.predict(predictor_input)
 
 
 def map_front_to_predictor(form: Dict[str, Any]) -> Dict[str, Any]:
