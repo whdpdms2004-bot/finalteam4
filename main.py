@@ -43,7 +43,7 @@ app.include_router(influencer.router)
 
 @app.get("/")
 def root():
-    return {"message": "Beauty Fit Score API v2", "routers": ["brand", "buyer", "influencer"]}
+    return {"message": "Beauty Fit Score API", "routers": ["brand", "buyer", "influencer"]}
 # 서버가 정상 작동 중인지 확인 
 @app.get("/health")
 def health_check():
