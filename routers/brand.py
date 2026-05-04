@@ -66,7 +66,7 @@ def get_market_data(category_detail_id: int = 1, db: Session = Depends(get_db)):
     trend = {}
     for val in (category_detail_id, mid):
         r = _safe_query(db, """
-            SELECT review_count, search_volume_label, trend_id, yoy_pct, market_size_label
+            SELECT review_count, search_volume_label, trend, yoy_pct, market_size_label
             FROM trend_timing
             WHERE category_sub_id = :val
             LIMIT 1
@@ -132,7 +132,7 @@ def get_market_data(category_detail_id: int = 1, db: Session = Depends(get_db)):
     return {
         "review_count":         int(review_count) if review_count is not None else None,
         "search_volume_label":  trend.get("search_volume_label"),
-        "trend_id":             trend.get("trend_id"),
+        "trend_id":             trend.get("trend"),
         "yoy_pct":              float(yoy_pct) if yoy_pct is not None else None,
         "market_size_label":    trend.get("market_size_label"),
         "avg_review_score":     float(avg_rs) if avg_rs is not None else None,
