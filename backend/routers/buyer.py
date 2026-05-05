@@ -629,12 +629,42 @@ def ai_chat(req: AiChatRequest, db: Session = Depends(get_db)):
             ]
             complaints = list(ing_rows)
         except Exception:
-            keywords   = ["무기자차", "비건인증", "SPF50+", "논코메도제닉"]
-            trends     = [
-                {"name": "비건 선케어", "growth": "+39%", "bar": 0.9,  "hot": True},
-                {"name": "무기자차",    "growth": "+28%", "bar": 0.75, "hot": True},
-                {"name": "SPF50+",     "growth": "+15%", "bar": 0.58, "hot": False},
-            ]
+            _HARDCODED = {
+                "스킨케어": {
+                    "keywords": ["moisture", "scent", "irritation", "sticky", "shorteffect"],
+                    "trends": [
+                        {"name": "Moisture",      "growth": "+31%", "bar": 1.0,  "hot": True},
+                        {"name": "Irritation",    "growth": "+24%", "bar": 0.77, "hot": True},
+                        {"name": "Short Effect",  "growth": "+18%", "bar": 0.58, "hot": False},
+                    ],
+                },
+                "클렌징": {
+                    "keywords": ["lowph", "gentle", "doublecleanser", "sensitive"],
+                    "trends": [
+                        {"name": "Low pH",        "growth": "+28%", "bar": 1.0,  "hot": True},
+                        {"name": "Oil Cleanser",  "growth": "+21%", "bar": 0.75, "hot": True},
+                        {"name": "Gentle Foam",   "growth": "+14%", "bar": 0.50, "hot": False},
+                    ],
+                },
+                "마스크": {
+                    "keywords": ["sheetmask", "centella", "brightening", "hydrating"],
+                    "trends": [
+                        {"name": "Centella Mask", "growth": "+35%", "bar": 1.0,  "hot": True},
+                        {"name": "Hydra Mask",    "growth": "+24%", "bar": 0.69, "hot": True},
+                        {"name": "Brightening",   "growth": "+16%", "bar": 0.46, "hot": False},
+                    ],
+                },
+            }
+            fb = _HARDCODED.get(cat_name or "", {
+                "keywords": ["무기자차", "비건인증", "SPF50+", "논코메도제닉"],
+                "trends": [
+                    {"name": "비건 선케어", "growth": "+39%", "bar": 1.0,  "hot": True},
+                    {"name": "무기자차",    "growth": "+28%", "bar": 0.72, "hot": True},
+                    {"name": "SPF50+",     "growth": "+15%", "bar": 0.38, "hot": False},
+                ],
+            })
+            keywords   = fb["keywords"]
+            trends     = fb["trends"]
             complaints = []
     except Exception:
         _CAT_FALLBACK = {
