@@ -629,43 +629,47 @@ def ai_chat(req: AiChatRequest, db: Session = Depends(get_db)):
             ]
             complaints = list(ing_rows)
         except Exception:
-            _HARDCODED = {
-                "스킨케어": {
-                    "keywords": ["moisture", "scent", "irritation", "sticky", "shorteffect"],
-                    "trends": [
-                        {"name": "Moisture",      "growth": "+31%", "bar": 1.0,  "hot": True},
-                        {"name": "Irritation",    "growth": "+24%", "bar": 0.77, "hot": True},
-                        {"name": "Short Effect",  "growth": "+18%", "bar": 0.58, "hot": False},
-                    ],
-                },
-                "클렌징": {
-                    "keywords": ["lowph", "gentle", "doublecleanser", "sensitive"],
-                    "trends": [
-                        {"name": "Low pH",        "growth": "+28%", "bar": 1.0,  "hot": True},
-                        {"name": "Oil Cleanser",  "growth": "+21%", "bar": 0.75, "hot": True},
-                        {"name": "Gentle Foam",   "growth": "+14%", "bar": 0.50, "hot": False},
-                    ],
-                },
-                "마스크": {
-                    "keywords": ["sheetmask", "centella", "brightening", "hydrating"],
-                    "trends": [
-                        {"name": "Centella Mask", "growth": "+35%", "bar": 1.0,  "hot": True},
-                        {"name": "Hydra Mask",    "growth": "+24%", "bar": 0.69, "hot": True},
-                        {"name": "Brightening",   "growth": "+16%", "bar": 0.46, "hot": False},
-                    ],
-                },
-            }
-            fb = _HARDCODED.get(cat_name or "", {
-                "keywords": ["무기자차", "비건인증", "SPF50+", "논코메도제닉"],
-                "trends": [
-                    {"name": "비건 선케어", "growth": "+39%", "bar": 1.0,  "hot": True},
-                    {"name": "무기자차",    "growth": "+28%", "bar": 0.72, "hot": True},
-                    {"name": "SPF50+",     "growth": "+15%", "bar": 0.38, "hot": False},
-                ],
-            })
-            keywords   = fb["keywords"]
-            trends     = fb["trends"]
-            complaints = []
+            # ingredient_trend도 없으면 GPT로 카테고리별 트렌드 생성
+            keywords, trends, complaints = [], [], []
+            if _ai:
+                try:
+                    import json as _json
+                    resp = _ai.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": (
+                                    "당신은 K뷰티 미국 시장 분석 전문가입니다. "
+                                    "요청한 JSON 형식만 반환하세요. 다른 텍스트 없이."
+                                ),
+                            },
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"미국 K뷰티 {cat_name or '전체'} 카테고리에서 "
+                                    f"소비자들이 자주 불만을 제기하는 키워드 4개와 "
+                                    f"급상승 트렌드 3개를 분석해줘.\n"
+                                    f"아래 JSON 형식으로만 반환:\n"
+                                    f'{{"keywords":["kw1","kw2","kw3","kw4"],'
+                                    f'"trends":['
+                                    f'{{"name":"영문트렌드명","growth":"+XX%","bar":0.XX,"hot":true}},'
+                                    f'{{"name":"영문트렌드명","growth":"+XX%","bar":0.XX,"hot":true}},'
+                                    f'{{"name":"영문트렌드명","growth":"+XX%","bar":0.XX,"hot":false}}'
+                                    f']}}\n'
+                                    f"keywords는 영문 소문자 공백 없이. bar는 0.0~1.0."
+                                ),
+                            },
+                        ],
+                        max_tokens=200,
+                        temperature=0.3,
+                    )
+                    raw = resp.choices[0].message.content.strip()
+                    data = _json.loads(raw)
+                    keywords = data.get("keywords", [])
+                    trends   = data.get("trends", [])
+                except Exception:
+                    pass
     except Exception:
         _CAT_FALLBACK = {
             "스킨케어": {
