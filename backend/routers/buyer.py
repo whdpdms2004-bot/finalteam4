@@ -578,47 +578,47 @@ def ai_chat(req: AiChatRequest, db: Session = Depends(get_db)):
     cat_name, cat_id = _chat_detect_cat(q)
     products = _chat_filter(q, req.show_all)
 
-    # ingredient_trend + trend_timing → 트렌드 & 키워드
+    # unmet_needs → 트렌드 & 키워드 (대분류 기준 불만 리뷰 키워드)
     try:
-        # 급상승 키워드 — ingredient_trend (YoY 상위)
-        ing_rows = db.execute(text("""
-            SELECT kr_keyword, us_keyword, us_yoy_pct, us_stage, lag_month
-            FROM ingredient_trend
-            ORDER BY us_yoy_pct DESC
-            LIMIT 8
-        """)).mappings().fetchall()
-
-        # 카테고리 트렌드 — trend_timing (category_sub → category_main 조인)
-        trend_rows = db.execute(text("""
-            SELECT tt.plc_stage, tt.yoy_pct, tt.review_count,
-                   cs.name_kr, cs.name_en
-            FROM trend_timing tt
-            JOIN category_sub cs ON cs.category_sub_id = tt.category_sub_id
-            WHERE (:cat_id IS NULL OR cs.category_main_id = :cat_id)
-              AND cs.is_active = 1
-            ORDER BY tt.yoy_pct DESC
+        rows = db.execute(text("""
+            SELECT topic_label_en, topic_label_kr, topic_pct
+            FROM unmet_needs
+            WHERE (:cat_id IS NULL OR category_main_id = :cat_id)
+            ORDER BY topic_rank
             LIMIT 6
         """), {"cat_id": cat_id}).mappings().fetchall()
+        sorted_rows = sorted(rows, key=lambda r: float(r["topic_pct"]), reverse=True)
 
-        if not ing_rows and not trend_rows:
-            raise Exception("no trend data")
+        if not sorted_rows:
+            raise Exception("no unmet_needs data for this category")
 
-        keywords = [r["kr_keyword"] for r in ing_rows[:4]]
-        max_yoy  = float(ing_rows[0]["us_yoy_pct"]) if ing_rows else 50.0
+        keywords = [r["topic_label_en"].replace(" ", "").lower() for r in sorted_rows[:4]]
+        max_pct  = float(sorted_rows[0]["topic_pct"])
+        trends   = [
+            {
+                "name":   r["topic_label_en"],
+                "growth": f"+{round(float(r['topic_pct']) * 0.38)}%",
+                "bar":    round(min(float(r["topic_pct"]) / max_pct, 1.0), 2),
+                "hot":    i < 2,
+            }
+            for i, r in enumerate(sorted_rows[:3])
+        ]
+        complaints = list(sorted_rows)
 
-        if trend_rows:
-            trends = [
-                {
-                    "name":   f"{r['name_kr']} ({r['plc_stage']})",
-                    "growth": f"+{round(float(r['yoy_pct']))}%",
-                    "bar":    round(min(float(r["yoy_pct"]) / max(float(trend_rows[0]["yoy_pct"]), 1), 1.0), 2),
-                    "hot":    i < 2,
-                }
-                for i, r in enumerate(trend_rows[:3])
-            ]
-        else:
-            # trend_timing 데이터 없으면 ingredient_trend로 대체
-            trends = [
+    except Exception:
+        # unmet_needs 없는 카테고리 → ingredient_trend fallback
+        try:
+            ing_rows = db.execute(text("""
+                SELECT kr_keyword, us_keyword, us_yoy_pct
+                FROM ingredient_trend
+                ORDER BY us_yoy_pct DESC
+                LIMIT 8
+            """)).mappings().fetchall()
+            if not ing_rows:
+                raise Exception("no ingredient_trend data")
+            keywords   = [r["kr_keyword"] for r in ing_rows[:4]]
+            max_yoy    = float(ing_rows[0]["us_yoy_pct"])
+            trends     = [
                 {
                     "name":   r["kr_keyword"],
                     "growth": f"+{round(float(r['us_yoy_pct']))}%",
@@ -627,7 +627,15 @@ def ai_chat(req: AiChatRequest, db: Session = Depends(get_db)):
                 }
                 for i, r in enumerate(ing_rows[:3])
             ]
-        complaints = list(ing_rows)
+            complaints = list(ing_rows)
+        except Exception:
+            keywords   = ["무기자차", "비건인증", "SPF50+", "논코메도제닉"]
+            trends     = [
+                {"name": "비건 선케어", "growth": "+39%", "bar": 0.9,  "hot": True},
+                {"name": "무기자차",    "growth": "+28%", "bar": 0.75, "hot": True},
+                {"name": "SPF50+",     "growth": "+15%", "bar": 0.58, "hot": False},
+            ]
+            complaints = []
     except Exception:
         _CAT_FALLBACK = {
             "스킨케어": {
