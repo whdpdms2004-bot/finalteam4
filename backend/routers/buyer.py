@@ -489,11 +489,14 @@ _INGREDIENT_FALLBACK = {
 }
 
 def _get_ingredient_keywords(cat_name: Optional[str], db=None) -> list:
-    """카테고리별 급상승 성분 키워드 반환.
-    1순위: ingredient_trend DB / 2순위: LLM 생성 / 3순위: 카테고리별 하드코딩"""
-    import re as _re, json as _json
+    """카테고리별 급상승 성분 키워드 반환. 항상 하드코딩 기본값 보장."""
+    # 하드코딩 기본값 먼저 확보 (절대 빈 값 방지)
+    base = _INGREDIENT_FALLBACK.get(
+        cat_name or "",
+        ["niacinamide", "ceramide", "hyaluronicacid", "retinol"]
+    )
 
-    # ingredient_trend DB
+    # ingredient_trend DB로 덮어쓰기 시도
     if db:
         try:
             rows = db.execute(text("""
@@ -505,32 +508,7 @@ def _get_ingredient_keywords(cat_name: Optional[str], db=None) -> list:
         except Exception:
             pass
 
-    # LLM 생성 (JSON 추출 강화)
-    if _ai and cat_name:
-        try:
-            resp = _ai.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "K뷰티 성분 전문가. JSON 배열만 반환. 설명 없이."},
-                    {"role": "user", "content": (
-                        f"미국에서 급상승 중인 K뷰티 {cat_name} 핵심 성분 5개를 "
-                        f"영문 소문자 공백없이 JSON 배열로만 반환. "
-                        f'예시: ["niacinamide","ceramide","retinol","peptide","hyaluronicacid"]'
-                    )},
-                ],
-                max_tokens=80,
-                temperature=0.2,
-            )
-            raw = resp.choices[0].message.content.strip()
-            # 앞뒤 텍스트 걷어내고 JSON 배열만 추출
-            match = _re.search(r'\[.*?\]', raw, _re.DOTALL)
-            if match:
-                return _json.loads(match.group())
-        except Exception:
-            pass
-
-    # 카테고리별 하드코딩 fallback
-    return _INGREDIENT_FALLBACK.get(cat_name or "", ["niacinamide", "ceramide", "hyaluronicacid", "retinol"])
+    return base
 
 
 def _chat_detect_cat(q: str):
