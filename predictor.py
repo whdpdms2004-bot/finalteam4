@@ -12,7 +12,7 @@ import joblib
 import shap
 
 DEFAULT_MODEL_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "data", "model_output", "lgbm_v99.pkl"
+    os.path.dirname(__file__), "data", "model_output", "lgbm_v99.pkl"
 )
 
 # gt_trend_stats 계산용 매핑: (성분 감지 패턴, gt_trend_stats 키)

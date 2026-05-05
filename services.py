@@ -80,6 +80,7 @@ def save_product_and_predict(db: Session, data: ProductCreate) -> Dict[str, Any]
         brand_name=data.brand_name,
         price=data.price,
         spf_index=data.spf_index,
+        sub_category=data.sub_category,
     )
     db.add(product)
     db.flush()
@@ -103,7 +104,13 @@ def save_product_and_predict(db: Session, data: ProductCreate) -> Dict[str, Any]
         "spf":         data.spf_index,
         "ingredients": ingredients_str,
     })
-    return _predictor.predict(predictor_input)
+    result = _predictor.predict(predictor_input)
+
+    # score DB 저장
+    product.score = result.get("score")
+    db.commit()
+
+    return {"product_id": product.product_id, **result}
 
 
 def map_front_to_predictor(form: Dict[str, Any]) -> Dict[str, Any]:
