@@ -737,3 +737,4 @@ def ai_chat(req: AiChatRequest, db: Session = Depends(get_db)):
         "suppliers": suppliers,
         "actions":   [{"label": "제품 전체 보기"}, {"label": "매칭 요청하기"}],
     }
+
