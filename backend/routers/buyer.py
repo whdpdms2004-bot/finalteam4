@@ -232,6 +232,37 @@ def get_influencers_for_product(product_id: int, db: Session = Depends(get_db)):
     return [_format_influencer(dict(r)) for r in rows]
 
 
+@router.get("/price-stats")
+def get_price_stats(category: str = Query("스킨케어"), db: Session = Depends(get_db)):
+    """카테고리별 실제 DB 가격 통계 (전체 브랜드 기준)"""
+    MAIN_NAME_MAP = {"스킨케어": 1, "클렌징": 2, "선케어": 3, "마스크팩": 4}
+    cat_id = SUBCAT_TO_MAIN.get(category) or MAIN_NAME_MAP.get(category, 1)
+
+    matching_subs = [sub for sub, mid in SUBCAT_TO_MAIN.items() if mid == cat_id]
+    detail_filters = [
+        and_(Product.category_detail_id >= r.start, Product.category_detail_id < r.stop)
+        for r, mid in DETAIL_ID_TO_MAIN.items() if mid == cat_id
+    ]
+    f = []
+    if matching_subs:
+        f.append(Product.sub_category.in_(matching_subs))
+    f.extend(detail_filters)
+
+    q = db.query(Product).filter(Product.price.isnot(None))
+    if f:
+        q = q.filter(or_(*f))
+
+    prices = [float(p.price) for p in q.all() if p.price and float(p.price) > 0]
+    if not prices:
+        return {"min": 5.0, "avg": 54.0, "max": 146.0}
+
+    return {
+        "min": round(min(prices), 2),
+        "avg": round(sum(prices) / len(prices), 2),
+        "max": round(max(prices), 2),
+    }
+
+
 @router.get("/products")
 def get_products(
     category: Optional[str] = Query(None),
@@ -243,7 +274,7 @@ def get_products(
     query = (
         db.query(Product)
         .options(selectinload(Product.ingredients))
-        .filter(Product.brand_id == 1)          # 비플레인 상품만
+        .filter(Product.brand_id == 112)         # 아누아 상품만
         .filter(Product.status != '심사중')      # 심사 중은 바이어에게 비노출
     )
 
@@ -627,7 +658,7 @@ def ai_chat(req: AiChatRequest, db: Session = Depends(get_db)):
         trends   = [
             {
                 "name":   r["topic_label_en"],
-                "growth": f"+{round(float(r['topic_pct']) * 0.38)}%",
+                "growth": f"+{round(float(r['topic_pct']))}%",
                 "bar":    round(min(float(r["topic_pct"]) / max_pct, 1.0), 2),
                 "hot":    i < 2,
             }
