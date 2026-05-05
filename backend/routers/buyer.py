@@ -48,19 +48,39 @@ H03_DOCS = [
 _h03_vs:  Optional[object] = None
 _h03_llm: Optional[object] = None
 
-def _get_rag() -> tuple:
-    """FAISS 벡터스토어 + LLM 반환. 실패 시 (None, None)."""
+def _get_rag(db=None) -> tuple:
+    """FAISS 벡터스토어 + LLM 반환. 실패 시 (None, None).
+    db 전달 시 ingredient_trend 테이블에서 RAG 문서를 동적으로 빌드."""
     global _h03_vs, _h03_llm
     if not _lc_ok or not os.getenv("OPENAI_API_KEY"):
         return None, None
     try:
         if _h03_vs is None:
+            docs = H03_DOCS  # fallback: 하드코딩 H03 데이터
+            if db:
+                try:
+                    rows = db.execute(text("""
+                        SELECT kr_keyword, us_keyword, lag_month,
+                               us_stage, us_yoy_pct
+                        FROM ingredient_trend
+                        ORDER BY us_yoy_pct DESC
+                    """)).mappings().fetchall()
+                    if rows:
+                        docs = [
+                            f"{r['kr_keyword']} {r['us_keyword']}: "
+                            f"한국→미국 선행 {r['lag_month']}개월. "
+                            f"US YoY {float(r['us_yoy_pct']):.1f}%. "
+                            f"{r['us_stage'] or 'US 진입기'}."
+                            for r in rows
+                        ]
+                except Exception:
+                    pass
             emb = HuggingFaceEmbeddings(
                 model_name="all-MiniLM-L6-v2",
                 model_kwargs={"device": "cpu"},
                 encode_kwargs={"normalize_embeddings": True},
             )
-            _h03_vs = FAISS.from_texts(H03_DOCS, emb)
+            _h03_vs = FAISS.from_texts(docs, emb)
         if _h03_llm is None:
             _h03_llm = ChatOpenAI(
                 model_name="gpt-4o-mini",
@@ -86,7 +106,7 @@ K뷰티 성분의 한국→미국 트렌드 선행성 데이터(평균 25개월 
 매칭 제품: {n_products}개 | 카테고리: {category}
 주요 소비자 불만 키워드: {complaints}
 
-위 선행성 데이터를 활용해 제품 목록은 UI에 별도 표시되므로 제품명은 절대 나열하지 마세요.
+제품 목록은 UI에 별도 표시되므로 제품명은 절대 나열하지 마세요.
 선행 개월·US YoY·미국 주류화 예상 시점 수치를 활용해
 트렌드 타이밍과 소싱 기회만 2~3문장으로 한국어로 작성하세요.
 
@@ -478,16 +498,18 @@ def _chat_filter(q: str, show_all: bool) -> list:
     items = sorted(items, key=lambda p: p["fitScore"], reverse=True)
     return items if show_all else items[:3]
 
-def _chat_summary(query: str, n: int, category: Optional[str], complaints: list) -> str:
+def _chat_summary(query: str, n: int, category: Optional[str], complaints: list, db=None) -> str:
     prefix   = f"{category} 카테고리에서 " if category else ""
     fallback = f"분석 완료! {prefix}조건에 맞는 제품 {n}개를 찾았어요."
-    c_str    = ", ".join(
-        f"{r['topic_label_en']}({float(r['topic_pct']):.1f}%)"
-        for r in complaints[:3]
-    )
+    # complaints는 ingredient_trend 행 또는 unmet_needs 행 모두 대응
+    def _row_str(r):
+        if "kr_keyword" in r:
+            return f"{r['kr_keyword']}({float(r['us_yoy_pct']):.1f}%)"
+        return f"{r['topic_label_en']}({float(r['topic_pct']):.1f}%)"
+    c_str = ", ".join(_row_str(r) for r in complaints[:3])
 
-    # ── 1순위: LangChain RAG (H03 트렌드 선행성 컨텍스트) ──────
-    vs, llm = _get_rag()
+    # ── 1순위: LangChain RAG (ingredient_trend DB 기반 컨텍스트) ──
+    vs, llm = _get_rag(db)
     if vs and llm and _SOURCING_PROMPT:
         try:
             docs    = vs.similarity_search(query, k=3)
@@ -556,45 +578,68 @@ def ai_chat(req: AiChatRequest, db: Session = Depends(get_db)):
     cat_name, cat_id = _chat_detect_cat(q)
     products = _chat_filter(q, req.show_all)
 
-    # unmet_needs → 트렌드 & 키워드
+    # ingredient_trend + trend_timing → 트렌드 & 키워드
     try:
-        rows = db.execute(text("""
-            SELECT topic_label_en, topic_pct
-            FROM unmet_needs
-            WHERE (:cat_id IS NULL OR category_main_id = :cat_id)
-            ORDER BY topic_rank
+        # 급상승 키워드 — ingredient_trend (YoY 상위)
+        ing_rows = db.execute(text("""
+            SELECT kr_keyword, us_keyword, us_yoy_pct, us_stage, lag_month
+            FROM ingredient_trend
+            ORDER BY us_yoy_pct DESC
+            LIMIT 8
+        """)).mappings().fetchall()
+
+        # 카테고리 트렌드 — trend_timing (category_sub → category_main 조인)
+        trend_rows = db.execute(text("""
+            SELECT tt.plc_stage, tt.yoy_pct, tt.review_count,
+                   cs.name_kr, cs.name_en
+            FROM trend_timing tt
+            JOIN category_sub cs ON cs.category_sub_id = tt.category_sub_id
+            WHERE (:cat_id IS NULL OR cs.category_main_id = :cat_id)
+              AND cs.is_active = 1
+            ORDER BY tt.yoy_pct DESC
             LIMIT 6
         """), {"cat_id": cat_id}).mappings().fetchall()
-        sorted_rows = sorted(rows, key=lambda r: float(r["topic_pct"]), reverse=True)
 
-        if not sorted_rows:
-            raise Exception("no unmet_needs data for this category")
+        if not ing_rows and not trend_rows:
+            raise Exception("no trend data")
 
-        keywords = [r["topic_label_en"].replace(" ", "").lower() for r in sorted_rows[:4]]
+        keywords = [r["kr_keyword"] for r in ing_rows[:4]]
+        max_yoy  = float(ing_rows[0]["us_yoy_pct"]) if ing_rows else 50.0
 
-        max_pct  = float(sorted_rows[0]["topic_pct"]) if sorted_rows else 50.0
-        trends   = [
-            {
-                "name":   r["topic_label_en"],
-                "growth": f"+{round(float(r['topic_pct']) * 0.38)}%",
-                "bar":    round(min(float(r["topic_pct"]) / max_pct, 1.0), 2),
-                "hot":    i < 2,
-            }
-            for i, r in enumerate(sorted_rows[:3])
-        ]
-        complaints = list(sorted_rows)
+        if trend_rows:
+            trends = [
+                {
+                    "name":   f"{r['name_kr']} ({r['plc_stage']})",
+                    "growth": f"+{round(float(r['yoy_pct']))}%",
+                    "bar":    round(min(float(r["yoy_pct"]) / max(float(trend_rows[0]["yoy_pct"]), 1), 1.0), 2),
+                    "hot":    i < 2,
+                }
+                for i, r in enumerate(trend_rows[:3])
+            ]
+        else:
+            # trend_timing 데이터 없으면 ingredient_trend로 대체
+            trends = [
+                {
+                    "name":   r["kr_keyword"],
+                    "growth": f"+{round(float(r['us_yoy_pct']))}%",
+                    "bar":    round(min(float(r["us_yoy_pct"]) / max_yoy, 1.0), 2),
+                    "hot":    i < 2,
+                }
+                for i, r in enumerate(ing_rows[:3])
+            ]
+        complaints = list(ing_rows)
     except Exception:
         _CAT_FALLBACK = {
             "스킨케어": {
                 "keywords": ["niacinamide", "ceramide", "hyaluronicacid", "retinol"],
                 "trends": [
-                    {"name": "Niacinamide",    "growth": "+43%", "bar": 0.95, "hot": True},
-                    {"name": "Ceramide",       "growth": "+31%", "bar": 0.78, "hot": True},
-                    {"name": "Hyaluronic Acid","growth": "+22%", "bar": 0.60, "hot": False},
+                    {"name": "Niacinamide",     "growth": "+43%", "bar": 0.95, "hot": True},
+                    {"name": "Ceramide",        "growth": "+31%", "bar": 0.78, "hot": True},
+                    {"name": "Hyaluronic Acid", "growth": "+22%", "bar": 0.60, "hot": False},
                 ],
             },
             "클렌징": {
-                "keywords": ["lowph", "gentle", "doublecoat", "sensitive"],
+                "keywords": ["lowph", "gentle", "doublecleanser", "sensitive"],
                 "trends": [
                     {"name": "Low pH Cleanser", "growth": "+28%", "bar": 0.88, "hot": True},
                     {"name": "Oil Cleanser",    "growth": "+21%", "bar": 0.70, "hot": True},
@@ -622,14 +667,13 @@ def ai_chat(req: AiChatRequest, db: Session = Depends(get_db)):
         trends     = fb["trends"]
         complaints = []
 
-
     suppliers = [
         {"name": p["name"], "moq": f"{p['moq']}개", "lead": "30일",
          "score": p["fitScore"], "cert": p["ingredients"][0]}
         for p in products
     ]
 
-    summary = _chat_summary(q, len(products), cat_name, complaints)
+    summary = _chat_summary(q, len(products), cat_name, complaints, db=db)
 
     return {
         "summary":   summary,
