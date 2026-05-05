@@ -481,6 +481,42 @@ _AI_PRODUCTS = [
     {"id": 20, "name": "진정 수딩 마스크 25ml",          "category": "마스크",   "price": 7,  "spf": None,  "fitScore": 60, "moq": 100, "ingredients": ["알로에", "캐모마일"]},
 ]
 
+def _get_ingredient_keywords(cat_name: Optional[str], db=None) -> list:
+    """카테고리별 급상승 성분 키워드 반환.
+    1순위: ingredient_trend DB / 2순위: LLM 생성 / 3순위: 빈 리스트"""
+    # ingredient_trend DB
+    if db:
+        try:
+            rows = db.execute(text("""
+                SELECT kr_keyword FROM ingredient_trend
+                ORDER BY us_yoy_pct DESC LIMIT 5
+            """)).mappings().fetchall()
+            if rows:
+                return [r["kr_keyword"] for r in rows]
+        except Exception:
+            pass
+    # LLM 생성
+    if _ai and cat_name:
+        try:
+            import json as _json
+            resp = _ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "K뷰티 성분 전문가. JSON 배열만 반환."},
+                    {"role": "user", "content": (
+                        f"미국 시장에서 급상승 중인 K뷰티 {cat_name} 카테고리 핵심 성분 5개를 "
+                        f"영문 소문자 공백없이 JSON 배열로만 반환해줘. 예: [\"niacinamide\",\"ceramide\"]"
+                    )},
+                ],
+                max_tokens=80,
+                temperature=0.2,
+            )
+            return _json.loads(resp.choices[0].message.content.strip())
+        except Exception:
+            pass
+    return []
+
+
 def _chat_detect_cat(q: str):
     if any(k in q for k in ["선케어", "선크림", "spf", "끈적", "백탁", "자차", "여드름", "논코메도"]):
         return "선케어", 3
@@ -592,7 +628,7 @@ def ai_chat(req: AiChatRequest, db: Session = Depends(get_db)):
         if not sorted_rows:
             raise Exception("no unmet_needs data for this category")
 
-        keywords = [r["topic_label_en"].replace(" ", "").lower() for r in sorted_rows[:4]]
+        # 트렌드: unmet_needs 불만 데이터 사용
         max_pct  = float(sorted_rows[0]["topic_pct"])
         trends   = [
             {
@@ -604,9 +640,11 @@ def ai_chat(req: AiChatRequest, db: Session = Depends(get_db)):
             for i, r in enumerate(sorted_rows[:3])
         ]
         complaints = list(sorted_rows)
+        # 성분 키워드: ingredient_trend DB 또는 LLM 생성 (트렌드와 별도)
+        keywords = _get_ingredient_keywords(cat_name, db)
 
     except Exception:
-        # unmet_needs 없는 카테고리 → ingredient_trend fallback
+        # unmet_needs 없는 카테고리 → ingredient_trend로 트렌드 대체
         try:
             ing_rows = db.execute(text("""
                 SELECT kr_keyword, us_keyword, us_yoy_pct
@@ -616,9 +654,8 @@ def ai_chat(req: AiChatRequest, db: Session = Depends(get_db)):
             """)).mappings().fetchall()
             if not ing_rows:
                 raise Exception("no ingredient_trend data")
-            keywords   = [r["kr_keyword"] for r in ing_rows[:4]]
-            max_yoy    = float(ing_rows[0]["us_yoy_pct"])
-            trends     = [
+            max_yoy = float(ing_rows[0]["us_yoy_pct"])
+            trends  = [
                 {
                     "name":   r["kr_keyword"],
                     "growth": f"+{round(float(r['us_yoy_pct']))}%",
@@ -629,47 +666,33 @@ def ai_chat(req: AiChatRequest, db: Session = Depends(get_db)):
             ]
             complaints = list(ing_rows)
         except Exception:
-            # ingredient_trend도 없으면 GPT로 카테고리별 트렌드 생성
-            keywords, trends, complaints = [], [], []
+            # GPT로 트렌드 생성
+            trends, complaints = [], []
             if _ai:
                 try:
                     import json as _json
                     resp = _ai.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[
-                            {
-                                "role": "system",
-                                "content": (
-                                    "당신은 K뷰티 미국 시장 분석 전문가입니다. "
-                                    "요청한 JSON 형식만 반환하세요. 다른 텍스트 없이."
-                                ),
-                            },
-                            {
-                                "role": "user",
-                                "content": (
-                                    f"미국 K뷰티 {cat_name or '전체'} 카테고리에서 "
-                                    f"소비자들이 자주 불만을 제기하는 키워드 4개와 "
-                                    f"급상승 트렌드 3개를 분석해줘.\n"
-                                    f"아래 JSON 형식으로만 반환:\n"
-                                    f'{{"keywords":["kw1","kw2","kw3","kw4"],'
-                                    f'"trends":['
-                                    f'{{"name":"영문트렌드명","growth":"+XX%","bar":0.XX,"hot":true}},'
-                                    f'{{"name":"영문트렌드명","growth":"+XX%","bar":0.XX,"hot":true}},'
-                                    f'{{"name":"영문트렌드명","growth":"+XX%","bar":0.XX,"hot":false}}'
-                                    f']}}\n'
-                                    f"keywords는 영문 소문자 공백 없이. bar는 0.0~1.0."
-                                ),
-                            },
+                            {"role": "system", "content": "K뷰티 미국 시장 분석 전문가. JSON만 반환."},
+                            {"role": "user", "content": (
+                                f"미국 K뷰티 {cat_name or '전체'} 카테고리 급상승 트렌드 3개.\n"
+                                f'JSON만 반환: {{"trends":['
+                                f'{{"name":"영문명","growth":"+XX%","bar":0.XX,"hot":true}},'
+                                f'{{"name":"영문명","growth":"+XX%","bar":0.XX,"hot":true}},'
+                                f'{{"name":"영문명","growth":"+XX%","bar":0.XX,"hot":false}}'
+                                f']}}\nbar는 0.0~1.0.'
+                            )},
                         ],
-                        max_tokens=200,
+                        max_tokens=150,
                         temperature=0.3,
                     )
-                    raw = resp.choices[0].message.content.strip()
-                    data = _json.loads(raw)
-                    keywords = data.get("keywords", [])
-                    trends   = data.get("trends", [])
+                    data = _json.loads(resp.choices[0].message.content.strip())
+                    trends = data.get("trends", [])
                 except Exception:
                     pass
+        # 성분 키워드는 항상 LLM/DB로 생성
+        keywords = _get_ingredient_keywords(cat_name, db)
 
     suppliers = [
         {"name": p["name"], "moq": f"{p['moq']}개", "lead": "30일",
